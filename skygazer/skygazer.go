@@ -6,11 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/patrickmn/go-cache"
 )
 
 const (
@@ -19,10 +20,13 @@ const (
 	siaAgent               = "Sia-Agent"
 	userAgentHeader        = "User-Agent"
 	canonicalSkylinkHeader = "Skynet-Canonical-Skylink"
+	cacheExpiration        = 60 * time.Minute
+	cacheInterval          = time.Minute
 )
 
 type (
 	SkyGazer struct {
+		cache *cache.Cache
 	}
 
 	SkyfileMetadata struct {
@@ -45,10 +49,17 @@ type (
 		CanonicalSkylink string
 		Metadata         SkyfileMetadata
 	}
+
+	maybeVerifiedSkylink struct {
+		successfullyVerified bool
+		verifiedSkylink      *VerifiedSkylink
+	}
 )
 
 func New() *SkyGazer {
-	return &SkyGazer{}
+	return &SkyGazer{
+		cache: cache.New(cacheExpiration, cacheInterval),
+	}
 }
 
 func (sg *SkyGazer) Listen(ctx context.Context, socketPath string) error {
@@ -77,11 +88,19 @@ func (sg *SkyGazer) Listen(ctx context.Context, socketPath string) error {
 		scanner := bufio.NewScanner(conn)
 		if scanner.Scan() {
 			line := scanner.Text()
-			verifiedSkylink, err := probe(line)
-			if err != nil {
-				log.Println(err)
+
+			cacheEntry, cached := sg.cache.Get(line)
+			var mVerifiedSkylink maybeVerifiedSkylink
+			if cached {
+				mVerifiedSkylink = cacheEntry.(maybeVerifiedSkylink)
+			} else {
+				mVerifiedSkylink = probe(line)
+				sg.cache.Set(line, mVerifiedSkylink, cache.DefaultExpiration)
 			}
-			fmt.Println(verifiedSkylink)
+
+			fmt.Println("cached:", cached)
+			fmt.Println(mVerifiedSkylink)
+			fmt.Println(mVerifiedSkylink.verifiedSkylink)
 		}
 
 		err = conn.Close()
@@ -98,34 +117,38 @@ func (sg *SkyGazer) Listen(ctx context.Context, socketPath string) error {
 	return nil
 }
 
-func probe(skylink string) (*VerifiedSkylink, error) {
+func probe(skylink string) maybeVerifiedSkylink {
+	link := maybeVerifiedSkylink{}
+
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", fmt.Sprintf(apiEndpointTemplate, skylink), nil)
 	if err != nil {
-		return nil, err
+		return link
 	}
 
 	req.Header.Add(userAgentHeader, siaAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return link
 	}
 	defer resp.Body.Close()
 
 	canonicalSkylink := resp.Header.Get(canonicalSkylinkHeader)
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return link
 	}
 
 	var metadata SkyfileMetadata
 	err = json.Unmarshal(body, &metadata)
 	if err != nil {
-		return nil, err
+		return link
 	}
 
-	return &VerifiedSkylink{
+	link.successfullyVerified = true
+	link.verifiedSkylink = &VerifiedSkylink{
 		CanonicalSkylink: canonicalSkylink,
 		Metadata:         metadata,
-	}, nil
+	}
+	return link
 }
