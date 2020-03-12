@@ -25,8 +25,13 @@ const (
 )
 
 type (
+	Broadcaster interface {
+		Broadcast(link VerifiedSkylink)
+	}
+
 	SkyGazer struct {
-		cache *cache.Cache
+		broadcaster Broadcaster
+		cache       *cache.Cache
 	}
 
 	SkyfileMetadata struct {
@@ -56,9 +61,10 @@ type (
 	}
 )
 
-func New() *SkyGazer {
+func New(broadcaster Broadcaster) *SkyGazer {
 	return &SkyGazer{
-		cache: cache.New(cacheExpiration, cacheInterval),
+		broadcaster: broadcaster,
+		cache:       cache.New(cacheExpiration, cacheInterval),
 	}
 }
 
@@ -76,7 +82,11 @@ func (sg *SkyGazer) Listen(ctx context.Context, socketPath string) error {
 	for ctx.Err() == nil {
 		// Wake up from Accept() periodically to
 		// check if we need to shutdown the server.
-		ln.SetDeadline(time.Now().Add(interruptInterval))
+		err = ln.SetDeadline(time.Now().Add(interruptInterval))
+		if err != nil {
+			return err
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
 			if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
@@ -98,9 +108,9 @@ func (sg *SkyGazer) Listen(ctx context.Context, socketPath string) error {
 				sg.cache.Set(line, mVerifiedSkylink, cache.DefaultExpiration)
 			}
 
-			fmt.Println("cached:", cached)
-			fmt.Println(mVerifiedSkylink)
-			fmt.Println(mVerifiedSkylink.verifiedSkylink)
+			if mVerifiedSkylink.successfullyVerified {
+				sg.broadcaster.Broadcast(*mVerifiedSkylink.verifiedSkylink)
+			}
 		}
 
 		err = conn.Close()

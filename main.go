@@ -7,7 +7,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/javgh/skygaze/broadcaster"
 	"github.com/javgh/skygaze/skygazer"
+)
+
+const (
+	broadcasterAddress = ":8023"
 )
 
 func installSignalHandlers(cancel context.CancelFunc) {
@@ -22,7 +27,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go installSignalHandlers(cancel)
 
-	skygazer := skygazer.New()
+	broadcaster := broadcaster.New()
+	go broadcaster.Serve(ctx, broadcasterAddress)
+
+	skygazer := skygazer.New(broadcaster)
 	err := skygazer.Listen(ctx, "skygaze.sock")
 	if err != nil {
 		log.Fatal(err)
