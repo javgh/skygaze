@@ -14,7 +14,8 @@ import (
 
 const (
 	interruptInterval = 2 * time.Second
-	template          = "https://siasky.net/%s | %s\n"
+	templateFile      = "https://siasky.net/%s | %s\n"
+	templateDirectory = "https://siasky.net/%s/%s | %s\n"
 	cacheExpiration   = 30 * time.Second
 	cacheInterval     = 5 * time.Second
 	connectionTimeout = 30 * time.Second
@@ -80,24 +81,48 @@ func (b *Broadcaster) Broadcast(link skygazer.VerifiedSkylink) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 
-	line := fmt.Sprintf(template, link.CanonicalSkylink, link.Metadata.Filename)
 	for remoteAddr, conn := range b.connections {
 		key := remoteAddr + "|" + link.CanonicalSkylink
 		_, cached := b.cache.Get(key)
 		if !cached {
 			b.cache.Set(key, true, cache.DefaultExpiration)
 
-			err := conn.SetDeadline(time.Now().Add(connectionTimeout))
-			if err != nil {
-				_ = conn.Close()
-				delete(b.connections, remoteAddr)
+			if len(link.Metadata.Subfiles) <= 1 {
+				line := fmt.Sprintf(templateFile, link.CanonicalSkylink, link.Metadata.Filename)
+
+				err := writeWithDeadline(conn, line)
+				if err != nil {
+					_ = conn.Close()
+					delete(b.connections, remoteAddr)
+				}
+			} else {
+				for _, subfileMetadata := range link.Metadata.Subfiles {
+					line := fmt.Sprintf(templateDirectory, link.CanonicalSkylink,
+						subfileMetadata.Filename, subfileMetadata.Filename)
+
+					err := writeWithDeadline(conn, line)
+					if err != nil {
+						_ = conn.Close()
+						delete(b.connections, remoteAddr)
+						break
+					}
+				}
 			}
 
-			_, err = conn.Write([]byte(line))
-			if err != nil {
-				_ = conn.Close()
-				delete(b.connections, remoteAddr)
-			}
 		}
 	}
+}
+
+func writeWithDeadline(conn net.Conn, line string) error {
+	err := conn.SetDeadline(time.Now().Add(connectionTimeout))
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write([]byte(line))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
