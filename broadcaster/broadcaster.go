@@ -15,7 +15,7 @@ import (
 const (
 	interruptInterval = 2 * time.Second
 	template          = "https://siasky.net/%s | %s\n"
-	cacheExpiration   = 10 * time.Second
+	cacheExpiration   = 30 * time.Second
 	cacheInterval     = 5 * time.Second
 	connectionTimeout = 30 * time.Second
 )

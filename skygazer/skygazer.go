@@ -143,6 +143,10 @@ func probe(skylink string) maybeVerifiedSkylink {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return link
+	}
+
 	canonicalSkylink := resp.Header.Get(canonicalSkylinkHeader)
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
