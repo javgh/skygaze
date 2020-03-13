@@ -1,0 +1,73 @@
+From 256b9285e25b72fff1927f105cb3ea8ce331b179 Mon Sep 17 00:00:00 2001
+From: Jan Vornberger <jan@271.de>
+Date: Thu, 12 Mar 2020 21:46:13 +0100
+Subject: [PATCH 2/2] Report on incoming sector requests
+
+---
+ modules/host/newrpc.go | 35 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 35 insertions(+)
+
+diff --git a/modules/host/newrpc.go b/modules/host/newrpc.go
+index e1b2ee13b..d28420b5b 100644
+--- a/modules/host/newrpc.go
++++ b/modules/host/newrpc.go
+@@ -3,7 +3,9 @@ package host
+ import (
+ 	"encoding/json"
+ 	"errors"
++	"fmt"
+ 	"math/bits"
++	"net"
+ 	"sort"
+ 	"sync/atomic"
+ 	"time"
+@@ -380,6 +382,30 @@ func (h *Host) managedRPCLoopWrite(s *rpcSession) error {
+ 	return nil
+ }
+ 
++func transmit(socketPath string, skylink string) error {
++	unixAddr, err := net.ResolveUnixAddr("unix", socketPath)
++	if err != nil {
++		return err
++	}
++
++	conn, err := net.DialUnix("unix", nil, unixAddr)
++	if err != nil {
++		return err
++	}
++
++	_, err = conn.Write([]byte(fmt.Sprintf("%s\n", skylink)))
++	if err != nil {
++		return err
++	}
++
++	err = conn.Close()
++	if err != nil {
++		return err
++	}
++
++	return nil
++}
++
+ // managedRPCLoopRead writes an RPC response containing the requested data
+ // (along with signatures and an optional Merkle proof).
+ func (h *Host) managedRPCLoopRead(s *rpcSession) error {
+@@ -513,6 +539,15 @@ func (h *Host) managedRPCLoopRead(s *rpcSession) error {
+ 		return err
+ 	}
+ 
++	// Report on incoming sector requests
++	for _, sec := range req.Sections {
++		sl, err := modules.NewSkylinkV1(sec.MerkleRoot, 0, modules.SkylinkMaxFetchSize)
++		if err != nil {
++			continue
++		}
++		_ = transmit("skygaze.sock", sl.String())
++	}
++
+ 	// enter response loop
+ 	for i, sec := range req.Sections {
+ 		// Fetch the requested data.
+-- 
+2.23.1
+

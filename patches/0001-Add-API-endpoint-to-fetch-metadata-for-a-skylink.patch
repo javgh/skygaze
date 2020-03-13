@@ -1,0 +1,152 @@
+From d914a30ffe3f69998d058a35ea75c5d59bf780e7 Mon Sep 17 00:00:00 2001
+From: Jan Vornberger <jan@271.de>
+Date: Fri, 6 Mar 2020 21:29:40 +0100
+Subject: [PATCH 1/2] Add API endpoint to fetch metadata for a skylink
+
+---
+ modules/renter.go         |  4 +++
+ modules/renter/skyfile.go | 63 +++++++++++++++++++++++++++++++++++++++
+ node/api/renter.go        | 25 ++++++++++++++++
+ node/api/routes.go        |  1 +
+ 4 files changed, 93 insertions(+)
+
+diff --git a/modules/renter.go b/modules/renter.go
+index 51b43ed9a..55d091b99 100644
+--- a/modules/renter.go
++++ b/modules/renter.go
+@@ -943,6 +943,10 @@ type Renter interface {
+ 	// DownloadSkylink will fetch a file from the Sia network using the skylink.
+ 	DownloadSkylink(Skylink) (SkyfileMetadata, Streamer, error)
+ 
++	// DownloadSkylinkMetadata will take a skylink and return its metadata
++	// and its canonical form.
++	DownloadSkylinkMetadata(Skylink) (SkyfileMetadata, Skylink, error)
++
+ 	// UploadSkyfile will upload data to the Sia network from a reader and
+ 	// create a skyfile, returning the skylink that can be used to access the
+ 	// file.
+diff --git a/modules/renter/skyfile.go b/modules/renter/skyfile.go
+index 46d1afd18..218105bb3 100644
+--- a/modules/renter/skyfile.go
++++ b/modules/renter/skyfile.go
+@@ -558,6 +558,69 @@ func (r *Renter) DownloadSkylink(link modules.Skylink) (modules.SkyfileMetadata,
+ 	return lfm, fs, nil
+ }
+ 
++// DownloadSkylinkMetadata will take a link and return its metadata and its
++// canonical form.
++func (r *Renter) DownloadSkylinkMetadata(link modules.Skylink) (modules.SkyfileMetadata, modules.Skylink, error) {
++	// Check if link is blacklisted
++	if r.staticSkynetBlacklist.IsBlacklisted(link) {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, ErrSkylinkBlacklisted
++	}
++
++	// Pull the offset and fetchSize out of the skylink.
++	offset, fetchSize, err := link.OffsetAndFetchSize()
++	if err != nil {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.AddContext(err, "unable to parse skylink")
++	}
++
++	// Fetch the leading chunk.
++	baseSector, err := r.DownloadByRoot(link.MerkleRoot(), offset, fetchSize)
++	if err != nil {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.AddContext(err, "unable to fetch base sector of skylink")
++	}
++	if len(baseSector) < SkyfileLayoutSize {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.New("download did not fetch enough data, layout cannot be decoded")
++	}
++
++	// Parse out the skyfileLayout.
++	var ll skyfileLayout
++	ll.decode(baseSector)
++	offset += SkyfileLayoutSize
++
++	// Skip fanout.
++	offset += ll.fanoutSize
++
++	// Parse out the skyfile metadata.
++	var lfm modules.SkyfileMetadata
++	metadataSize := ll.metadataSize
++	if offset >= uint64(len(baseSector)) || offset+metadataSize > uint64(len(baseSector)) {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.New("malformed skyfile")
++	}
++
++	err = json.Unmarshal(baseSector[offset:offset+metadataSize], &lfm)
++	if err != nil {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.AddContext(err, "unable to parse link file metadata")
++	}
++
++	offset += metadataSize
++	if offset >= uint64(len(baseSector)) {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.New("malformed skyfile")
++	}
++
++	var canonicalFetchSize uint64
++	if ll.fanoutSize == 0 {
++		canonicalFetchSize = SkyfileLayoutSize + metadataSize + ll.filesize
++	} else {
++		canonicalFetchSize = SkyfileLayoutSize + ll.fanoutSize + metadataSize
++	}
++
++	canonicalLink, err := modules.NewSkylinkV1(link.MerkleRoot(), 0, canonicalFetchSize)
++	if err != nil {
++		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.AddContext(err, "failed to build canonical skylink")
++	}
++
++	return lfm, canonicalLink, nil
++}
++
+ // PinSkylink wil fetch the file associated with the Skylink, and then pin all
+ // necessary content to maintain that Skylink.
+ func (r *Renter) PinSkylink(skylink modules.Skylink, lup modules.SkyfileUploadParameters) error {
+diff --git a/node/api/renter.go b/node/api/renter.go
+index 6e4500f38..18215eb75 100644
+--- a/node/api/renter.go
++++ b/node/api/renter.go
+@@ -1933,6 +1933,31 @@ func (api *API) skynetSkylinkHandlerGET(w http.ResponseWriter, req *http.Request
+ 	http.ServeContent(w, req, metadata.Filename, time.Time{}, streamer)
+ }
+ 
++// skynetMetadataHandlerGET accepts a skylink as input and will return
++// associated metadata
++func (api *API) skynetMetadataHandlerGET(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
++	strLink := ps.ByName("skylink")
++	strLink = strings.TrimPrefix(strLink, "/")
++
++	// Parse skylink
++	var skylink modules.Skylink
++	err := skylink.LoadString(strLink)
++	if err != nil {
++		WriteError(w, Error{fmt.Sprintf("error parsing skylink: %v", err)}, http.StatusBadRequest)
++		return
++	}
++
++	// Fetch the skyfile's metadata
++	metadata, canonicalSkylink, err := api.renter.DownloadSkylinkMetadata(skylink)
++	if err != nil {
++		WriteError(w, Error{fmt.Sprintf("failed to fetch skylink: %v", err)}, http.StatusInternalServerError)
++		return
++	}
++
++	w.Header().Set("Skynet-Canonical-Skylink", canonicalSkylink.String())
++	WriteJSON(w, metadata)
++}
++
+ // skynetSkylinkPinHandlerPOST will pin a skylink to this Sia node, ensuring
+ // uptime even if the original uploader stops paying for the file.
+ func (api *API) skynetSkylinkPinHandlerPOST(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+diff --git a/node/api/routes.go b/node/api/routes.go
+index 50bb102f8..733175691 100644
+--- a/node/api/routes.go
++++ b/node/api/routes.go
+@@ -126,6 +126,7 @@ func (api *API) buildHTTPRoutes() {
+ 		router.GET("/skynet/blacklist", api.skynetBlacklistHandlerGET)
+ 		router.POST("/skynet/blacklist", RequirePassword(api.skynetBlacklistHandlerPOST, requiredPassword))
+ 		router.GET("/skynet/skylink/*skylink", api.skynetSkylinkHandlerGET)
++		router.GET("/skynet/metadata/*skylink", api.skynetMetadataHandlerGET)
+ 		router.POST("/skynet/skyfile/*siapath", RequirePassword(api.skynetSkyfileHandlerPOST, requiredPassword))
+ 		router.POST("/skynet/pin/:skylink", RequirePassword(api.skynetSkylinkPinHandlerPOST, requiredPassword))
+ 
+-- 
+2.23.1
+
