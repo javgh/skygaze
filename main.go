@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	broadcasterAddress = ":8023"
+	broadcasterAddress = "127.0.0.1:8023"
 )
 
 func installSignalHandlers(cancel context.CancelFunc) {
