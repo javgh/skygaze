@@ -1,14 +1,14 @@
-From d914a30ffe3f69998d058a35ea75c5d59bf780e7 Mon Sep 17 00:00:00 2001
+From 3c461bc93164a72e8bd5e3e1c125a269e8bdee78 Mon Sep 17 00:00:00 2001
 From: Jan Vornberger <jan@271.de>
 Date: Fri, 6 Mar 2020 21:29:40 +0100
 Subject: [PATCH 1/2] Add API endpoint to fetch metadata for a skylink
 
 ---
  modules/renter.go         |  4 +++
- modules/renter/skyfile.go | 63 +++++++++++++++++++++++++++++++++++++++
- node/api/renter.go        | 25 ++++++++++++++++
+ modules/renter/skyfile.go | 64 +++++++++++++++++++++++++++++++++++++++
+ node/api/renter.go        | 25 +++++++++++++++
  node/api/routes.go        |  1 +
- 4 files changed, 93 insertions(+)
+ 4 files changed, 94 insertions(+)
 
 diff --git a/modules/renter.go b/modules/renter.go
 index 51b43ed9a..55d091b99 100644
@@ -26,10 +26,10 @@ index 51b43ed9a..55d091b99 100644
  	// create a skyfile, returning the skylink that can be used to access the
  	// file.
 diff --git a/modules/renter/skyfile.go b/modules/renter/skyfile.go
-index 46d1afd18..218105bb3 100644
+index 46d1afd18..9ddcc7a2e 100644
 --- a/modules/renter/skyfile.go
 +++ b/modules/renter/skyfile.go
-@@ -558,6 +558,69 @@ func (r *Renter) DownloadSkylink(link modules.Skylink) (modules.SkyfileMetadata,
+@@ -558,6 +558,70 @@ func (r *Renter) DownloadSkylink(link modules.Skylink) (modules.SkyfileMetadata,
  	return lfm, fs, nil
  }
  
@@ -67,7 +67,8 @@ index 46d1afd18..218105bb3 100644
 +	// Parse out the skyfile metadata.
 +	var lfm modules.SkyfileMetadata
 +	metadataSize := ll.metadataSize
-+	if offset >= uint64(len(baseSector)) || offset+metadataSize > uint64(len(baseSector)) {
++	if offset >= uint64(len(baseSector)) || metadataSize > uint64(len(baseSector)) ||
++		offset+metadataSize > uint64(len(baseSector)) {
 +		return modules.SkyfileMetadata{}, modules.Skylink{}, errors.New("malformed skyfile")
 +	}
 +
