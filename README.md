@@ -9,9 +9,10 @@ reconstruct the associated skylink and fetches its metadata. The collected
 information is provided to the user via a telnet-like server.
 
 To self-host: Patch the Sia source code (see folder `patches`), compile and run
-`siad`. Take note of the directory that `siad` is running in - let's say it is
-`~/sia`. In that case run: `go run main.go ~/sia/skygaze.sock`. Connecting to
-port 8023 should now provide access to Skygaze output:
+`siad` and configure it as a host and as a Skynet portal. Take note of the
+directory that `siad` is running in - let's say it is `~/sia`. In that case run:
+`go run main.go ~/sia/skygaze.sock`. Connecting to port 8023 should now provide
+access to Skygaze output:
 
     $ nc localhost 8023
     https://siasky.net/CABAB_1Dt0FJsxqsu_J4TodNCbCGvtFf1Uys_3EgzOlTcg | BigBuckBunny.mp4
